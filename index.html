@@ -118,6 +118,17 @@
   }
   .pin.a { background: #17463a; }
   .pin.b { background: #b23a2e; }
+  .saved { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 4px 12px; }
+  .saved summary { cursor: pointer; font-weight: 700; padding: 8px 0; }
+  .saved ul { list-style: none; margin: 0; padding: 0 0 6px; display: flex; flex-direction: column; }
+  .saved li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .saved li > button:first-child { flex: 1; min-width: 0; text-align: left; border: 0; padding: 2px 0; font-weight: 400; background: none; }
+  .saved strong, .saved small { display: block; overflow-wrap: anywhere; }
+  .saved small { color: var(--muted); font-size: 0.85rem; }
+  .saved .actions { display: flex; gap: 6px; flex: none; }
+  .saved .actions button { padding: 6px 10px; font-size: 0.85rem; }
+  .saved li input { flex: 1; min-width: 0; padding: 8px 10px; }
+  .danger { color: var(--busy); }
   .setup { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
   .link { align-self: flex-start; background: none; border: 0; padding: 4px 0; font-weight: 400; color: var(--muted); text-decoration: underline; }
   .stop {
@@ -173,6 +184,11 @@
     <button id="go" type="submit" class="primary big">Find route</button>
   </form>
 
+  <details id="saved" class="saved" open hidden>
+    <summary>Saved routes (<span id="saved-count">0</span>)</summary>
+    <ul id="saved-list"></ul>
+  </details>
+
   <p id="status" role="status"></p>
 
   <section id="result" class="result" hidden>
@@ -187,8 +203,17 @@
     <button id="gpx" type="button" class="primary big">Send to OsmAnd</button>
     <a id="gmaps" class="btn big" href="#" target="_blank" rel="noopener">Open in Google Maps</a>
     <div class="row wrap">
+      <button id="save" type="button">Save route</button>
       <button id="alt" type="button">Try another route</button>
       <button id="share" type="button">Share Google link</button>
+    </div>
+    <div id="save-form" class="field" hidden>
+      <label for="save-name">Route name</label>
+      <div class="row">
+        <input id="save-name" type="text" maxlength="60" enterkeyhint="done">
+        <button id="save-confirm" type="button" class="primary">Save</button>
+        <button id="save-cancel" type="button">Cancel</button>
+      </div>
     </div>
     <p class="hint">Send to OsmAnd passes the exact route to OsmAnd, where you can start navigation on it.</p>
 
@@ -372,6 +397,36 @@ function pickStops(route, max) {
   return chosen.sort((a, b) => a.d - b.d).map(c => pointAt(route, c.d));
 }
 
+// Saved routes keep only what's needed to redraw them (coordinates rounded to about 1 m);
+// distances and totals are worked out again when a route is opened.
+function packRoute(route) {
+  return {
+    coords: route.coords.map(([lat, lng]) => [+lat.toFixed(5), +lng.toFixed(5)]),
+    runs: route.runs.map(r => [r.cls, r.start, r.end]),
+    unpavedStretches: route.unpavedStretches.map(([a, b]) => [Math.round(a), Math.round(b)]),
+    seconds: Math.round(route.seconds),
+  };
+}
+
+function unpackRoute(packed) {
+  const coords = packed.coords;
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) cum[i] = cum[i - 1] + haversine(coords[i - 1], coords[i]);
+  const runs = packed.runs.map(([cls, start, end]) => ({ cls, start, end, len: cum[end] - cum[start] }));
+  const totals = { path: 0, quiet: 0, road: 0, main: 0 };
+  for (const r of runs) totals[r.cls] += r.len;
+  const unpaved = packed.unpavedStretches.reduce((sum, [a, b]) => sum + b - a, 0);
+  return { coords, cum, runs, totals, unpaved, unpavedStretches: packed.unpavedStretches, total: cum[cum.length - 1], seconds: packed.seconds };
+}
+
+// "Parkville to Brunswick", with " (2)" and so on added if that name is taken.
+function uniqueRouteName(fromName, toName, takenNames) {
+  const base = `${fromName} to ${toName}`;
+  let name = base;
+  for (let n = 2; takenNames.includes(name); n++) name = `${base} (${n})`;
+  return name;
+}
+
 function googleMapsUrl(destination, stops) {
   const fmt = p => p.lat.toFixed(6) + "," + p.lng.toFixed(6);
   const params = new URLSearchParams({ api: "1", destination: fmt(destination), travelmode: "bicycling" });
@@ -416,10 +471,12 @@ function setStatus(msg, isError = false) {
   $("status").classList.toggle("error", isError);
 }
 
-function setPoint(which, latlng, label) {
+// `name` is the plain place name used when naming a saved route (null for pins).
+function setPoint(which, latlng, label, name = null) {
   // The world map repeats sideways; wrap() turns e.g. -209° back into 151°.
   latlng = L.latLng(latlng).wrap();
   state[which] = { lat: latlng.lat, lng: latlng.lng };
+  state[which + "Name"] = name;
   $(which).value = label;
   const icon = L.divIcon({ className: "", html: `<div class="pin ${which === "from" ? "a" : "b"}">${which === "from" ? "A" : "B"}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
   if (markers[which]) markers[which].setLatLng(latlng);
@@ -516,7 +573,7 @@ function renderPlaces(which, places) {
 
 function choosePlace(which, place) {
   $(which + "-results").hidden = true;
-  setPoint(which, place, place.short);
+  setPoint(which, place, place.short, place.name);
   if (!state.from || !state.to) map.setView([place.lat, place.lng], 15);
   maybeRoute();
 }
@@ -583,7 +640,7 @@ $("plan").addEventListener("submit", async e => {
     if (!state[which] && $(which).value.trim()) {
       clearTimeout(timers[which]);
       const places = await suggest(which);
-      if (places.length) { $(which + "-results").hidden = true; setPoint(which, places[0], places[0].short); }
+      if (places.length) { $(which + "-results").hidden = true; setPoint(which, places[0], places[0].short, places[0].name); }
     }
   }
   if (!state.from || !state.to) { setStatus("Set both a start and a destination first.", true); return; }
@@ -705,6 +762,9 @@ async function findRoute() {
 function showRoute() {
   state.route = state.routes[state.alt];
   drawRoute();
+  $("save-form").hidden = true;
+  $("save").textContent = state.route.savedId ? "Saved" : "Save route";
+  $("save").disabled = !!state.route.savedId;
   const r = state.route, n = state.routes.length;
   const parts = [];
   if (n > 1) parts.push(`Route ${state.alt + 1} of ${n}${state.alt === 0 ? " (best match)" : ""}`);
@@ -794,6 +854,169 @@ $("gpx").addEventListener("click", async () => {
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 });
+
+// --- Saved routes (kept in this device's browser storage) ---
+function loadSaved() {
+  const list = store.get("saved", []);
+  return Array.isArray(list) ? list : [];
+}
+
+function writeSaved(list) {
+  try {
+    localStorage.setItem("qr.saved", JSON.stringify(list));
+    return true;
+  } catch {
+    setStatus("Couldn't save: this device's storage is full. Delete some saved routes and try again.", true);
+    return false;
+  }
+}
+
+// A short name for one end of the route: the place you picked, or the suburb
+// (then street) nearest a dropped pin or your location.
+async function endName(which) {
+  if (state[which + "Name"]) return state[which + "Name"];
+  const p = state[which];
+  try {
+    const res = await fetch(`https://photon.komoot.io/reverse?lat=${p.lat}&lon=${p.lng}&lang=en`);
+    const f = (await res.json()).features[0];
+    const pr = f.properties;
+    return pr.district || pr.locality || pr.street || pr.name || pr.city;
+  } catch {
+    return null;
+  }
+}
+
+$("save").addEventListener("click", async () => {
+  $("save-form").hidden = false;
+  $("save-name").value = "";
+  $("save-name").placeholder = "Naming…";
+  const [a, b] = await Promise.all([endName("from"), endName("to")]);
+  const taken = loadSaved().map(s => s.name);
+  if (!$("save-name").value) $("save-name").value = uniqueRouteName(a || "Start", b || "Destination", taken);
+  $("save-name").placeholder = "Route name";
+  $("save-name").focus();
+  $("save-name").select();
+});
+
+$("save-cancel").addEventListener("click", () => { $("save-form").hidden = true; });
+
+function confirmSave() {
+  const name = $("save-name").value.trim();
+  if (!name) { setStatus("Give the route a name first.", true); return; }
+  const entry = {
+    id: Date.now().toString(36),
+    name,
+    savedAt: new Date().toISOString(),
+    from: { ...state.from, label: $("from").value, name: state.fromName },
+    to: { ...state.to, label: $("to").value, name: state.toName },
+    route: packRoute(state.route),
+  };
+  const list = loadSaved();
+  list.unshift(entry);
+  if (!writeSaved(list)) return;
+  state.route.savedId = entry.id;
+  $("save-form").hidden = true;
+  $("save").textContent = "Saved";
+  $("save").disabled = true;
+  setStatus(`Saved as "${name}".`);
+  renderSaved();
+}
+$("save-confirm").addEventListener("click", confirmSave);
+$("save-name").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); confirmSave(); } });
+
+function openSaved(entry) {
+  setPoint("from", entry.from, entry.from.label, entry.from.name);
+  setPoint("to", entry.to, entry.to.label, entry.to.name);
+  const route = unpackRoute(entry.route);
+  route.savedId = entry.id;
+  state.routes = [route];
+  state.alt = 0;
+  showRoute();
+  setStatus(`${entry.name} · ${$("status").textContent}`);
+}
+
+function renderSaved() {
+  const list = loadSaved();
+  $("saved").hidden = !list.length;
+  $("saved-count").textContent = list.length;
+  const ul = $("saved-list");
+  ul.innerHTML = "";
+  for (const entry of list) {
+    const li = document.createElement("li");
+    const route = unpackRoute(entry.route);
+    const open = document.createElement("button");
+    open.type = "button";
+    const title = document.createElement("strong");
+    title.textContent = entry.name;
+    const meta = document.createElement("small");
+    const date = new Date(entry.savedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    meta.textContent = `${(route.total / 1000).toFixed(1)} km · ${Math.round(100 * route.totals.main / route.total)}% main roads · saved ${date}`;
+    open.append(title, meta);
+    open.addEventListener("click", () => openSaved(entry));
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.textContent = "Rename";
+    rename.addEventListener("click", () => startRename(li, entry));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "danger";
+    del.textContent = "Delete";
+    // First tap asks, second tap (within 4 seconds) deletes.
+    del.addEventListener("click", () => {
+      if (del.dataset.armed) {
+        writeSaved(loadSaved().filter(s => s.id !== entry.id));
+        if (state.route && state.route.savedId === entry.id) {
+          state.route.savedId = null;
+          $("save").textContent = "Save route";
+          $("save").disabled = false;
+        }
+        renderSaved();
+        return;
+      }
+      del.dataset.armed = "1";
+      del.textContent = "Tap to confirm";
+      setTimeout(() => { delete del.dataset.armed; del.textContent = "Delete"; }, 4000);
+    });
+    actions.append(rename, del);
+    li.append(open, actions);
+    ul.appendChild(li);
+  }
+}
+
+function startRename(li, entry) {
+  li.innerHTML = "";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 60;
+  input.value = entry.name;
+  input.setAttribute("aria-label", "New route name");
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const ok = document.createElement("button");
+  ok.type = "button";
+  ok.className = "primary";
+  ok.textContent = "Save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+  const finish = () => {
+    const name = input.value.trim();
+    if (name) writeSaved(loadSaved().map(s => (s.id === entry.id ? { ...s, name } : s)));
+    renderSaved();
+  };
+  ok.addEventListener("click", finish);
+  input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); finish(); } });
+  cancel.addEventListener("click", renderSaved);
+  actions.append(ok, cancel);
+  li.append(input, actions);
+  input.focus();
+  input.select();
+}
+
+renderSaved();
 
 // Start from where the rider is, if they allow it.
 locate(true);
