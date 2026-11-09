@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#17463a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Quiet Route">
+<title>Quiet Route</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+  /* Layout: map on top, controls below on phones; map left, panel right on wide screens. */
+  :root {
+    --bg: #f3f6f2;
+    --surface: #ffffff;
+    --ink: #17231e;
+    --muted: #5b6b63;
+    --line: #d5ded8;
+    --accent: #17463a;
+    --accent-ink: #ffffff;
+    --path: #1e8a4c;
+    --lane: #8cc63f;
+    --quiet: #4a7fb5;
+    --busy: #d64541;
+    --font: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101714; --surface: #18221e; --ink: #e6eee9; --muted: #9db0a6;
+      --line: #2c3a34; --accent: #7fd1a8; --accent-ink: #0d1f17;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.45 var(--font);
+    display: flex; flex-direction: column;
+  }
+  #map { height: 44vh; min-height: 260px; flex: none; background: var(--line); }
+  .panel {
+    flex: 1; overflow-y: auto;
+    padding-block: 16px calc(24px + env(safe-area-inset-bottom, 0px));
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  @media (min-width: 860px) {
+    body { flex-direction: row; }
+    #map { height: 100%; flex: 1; }
+    .panel { flex: none; width: 400px; border-left: 1px solid var(--line); }
+  }
+  h1 { margin: 0; font-size: 1.35rem; letter-spacing: -0.01em; }
+  .sub { margin: 2px 0 0; color: var(--muted); font-size: 0.95rem; }
+  .field { display: flex; flex-direction: column; gap: 6px; position: relative; }
+  label, legend { font-weight: 700; font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row.wrap { flex-wrap: wrap; }
+  .row > input { flex: 1; min-width: 0; }
+  input[type="search"], input[type="text"], input[type="password"] {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; width: 100%;
+  }
+  input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid var(--lane); outline-offset: 2px; }
+  button, .btn {
+    font: inherit; font-weight: 700; cursor: pointer; text-decoration: none; text-align: center;
+    border-radius: 10px; padding: 10px 14px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--ink);
+  }
+  button:disabled { opacity: 0.55; cursor: default; }
+  .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .big { display: block; padding: 14px; font-size: 1.05rem; }
+  .ghost { white-space: nowrap; }
+  .results {
+    list-style: none; margin: 0; padding: 4px; position: absolute; top: 100%; left: 0; right: 0; z-index: 1000;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  }
+  .results button { display: block; width: 100%; text-align: left; border: 0; font-weight: 400; padding: 10px; }
+  .results button:hover { background: var(--bg); }
+  .results strong { display: block; }
+  .results small { display: block; color: var(--muted); font-size: 0.85rem; }
+  fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label {
+    text-transform: none; letter-spacing: 0; font-size: 0.95rem; color: var(--ink);
+    padding: 10px; text-align: center; cursor: pointer; background: var(--surface);
+  }
+  .seg label small { display: block; font-weight: 400; color: var(--muted); font-size: 0.8rem; }
+  .seg input:checked + label { background: var(--accent); color: var(--accent-ink); }
+  .seg input:checked + label small { color: inherit; opacity: 0.85; }
+  .seg input:focus-visible + label { outline: 3px solid var(--lane); outline-offset: -3px; }
+  #status { margin: 0; color: var(--muted); min-height: 1.4em; }
+  #status.error { color: var(--busy); }
+  .result { display: flex; flex-direction: column; gap: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stats div { display: flex; flex-direction: column; }
+  .stats b { font-size: 1.5rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stats span { color: var(--muted); font-size: 0.85rem; }
+  .bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--line); }
+  .bar span { display: block; height: 100%; }
+  .legend { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 0.9rem; }
+  .legend li { display: flex; align-items: center; gap: 8px; }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .legend em { margin-left: auto; font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row.wrap button { flex: 1 1 auto; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .hint { margin: 0; color: var(--muted); font-size: 0.88rem; }
+  .pin {
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    font: 700 14px/1 var(--font); color: #fff; border: 3px solid #fff; box-shadow: 0 2px 6px rgb(0 0 0 / 0.4);
+  }
+  .pin.a { background: #17463a; }
+  .pin.b { background: #b23a2e; }
+  .setup { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  .link { align-self: flex-start; background: none; border: 0; padding: 4px 0; font-weight: 400; color: var(--muted); text-decoration: underline; }
+  .stop {
+    width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+    font: 700 12px/1 var(--font); background: #fff; color: #17463a; border: 2px solid #17463a;
+  }
+</style>
+</head>
+<body>
+<div id="map" aria-label="Map. Tap to set start, then destination."></div>
+
+<main class="panel">
+  <header>
+    <h1>Quiet Route</h1>
+    <p class="sub">Finds a route on bike paths first, then sends it to OsmAnd or Google Maps.</p>
+  </header>
+
+  <section id="setup" class="setup" hidden>
+    <label for="ors-key">OpenRouteService key</label>
+    <div class="row">
+      <input id="ors-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key">
+      <button id="save-key" type="button" class="primary">Save</button>
+    </div>
+    <p class="hint">Get a free key at openrouteservice.org: sign up, then copy the key from your dashboard. It's saved only on this device.</p>
+  </section>
+
+  <form id="plan" class="field-group" autocomplete="off" style="display:flex;flex-direction:column;gap:14px">
+    <div class="field">
+      <label for="from">From</label>
+      <div class="row">
+        <input id="from" type="search" enterkeyhint="search" placeholder="Search, or tap the map">
+        <button id="locate" type="button" class="ghost">My location</button>
+      </div>
+      <ul class="results" id="from-results" hidden></ul>
+    </div>
+
+    <div class="field">
+      <label for="to">To</label>
+      <input id="to" type="search" enterkeyhint="search" placeholder="Search, or tap the map">
+      <ul class="results" id="to-results" hidden></ul>
+    </div>
+
+    <fieldset>
+      <legend>Route style</legend>
+      <div class="seg">
+        <input type="radio" name="profile" id="p-trails" value="trails" checked>
+        <label for="p-trails">Paved paths first<small>No main roads or gravel</small></label>
+        <input type="radio" name="profile" id="p-fastest" value="fastest">
+        <label for="p-fastest">More direct<small>Quicker, more roads</small></label>
+      </div>
+    </fieldset>
+
+    <button id="go" type="submit" class="primary big">Find route</button>
+  </form>
+
+  <p id="status" role="status"></p>
+
+  <section id="result" class="result" hidden>
+    <div class="stats">
+      <div><b id="dist">–</b><span>km</span></div>
+      <div><b id="time">–</b><span>min (est.)</span></div>
+      <div><b id="away">–</b><span>off-road</span></div>
+    </div>
+    <div class="bar" id="bar" aria-hidden="true"></div>
+    <ul class="legend" id="legend"></ul>
+
+    <button id="gpx" type="button" class="primary big">Send to OsmAnd</button>
+    <a id="gmaps" class="btn big" href="#" target="_blank" rel="noopener">Open in Google Maps</a>
+    <div class="row wrap">
+      <button id="alt" type="button">Try another route</button>
+      <button id="share" type="button">Share Google link</button>
+    </div>
+    <p class="hint">Send to OsmAnd passes the exact route to OsmAnd, where you can start navigation on it.</p>
+
+    <div class="field">
+      <label for="stops">Stops sent to Google: <output id="stops-out" for="stops">8</output></label>
+      <input id="stops" type="range" min="2" max="9" step="1" value="8">
+    </div>
+    <p class="hint">These settings only affect Google Maps. The numbered dots are the stops Google Maps gets. Google plans its own way between them, so more stops keep it closer to this route. Google starts from wherever you are when you open the link. Check its line matches before you tap Start.</p>
+  </section>
+
+  <button id="change-key" type="button" class="link">Change routing key</button>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// --- route logic (pure functions, no page access) ---
+const CLASSES = {
+  path:  { label: "Bike & shared paths", color: "#1e8a4c" },
+  quiet: { label: "Quiet streets", color: "#4a7fb5" },
+  road:  { label: "Local roads", color: "#e0a030" },
+  main:  { label: "Main roads", color: "#d64541" },
+};
+// OpenRouteService "waytype" codes: 0 Unknown, 1 State road, 2 Road, 3 Street,
+// 4 Path, 5 Track, 6 Cycleway, 7 Footway, 8 Steps, 9 Ferry, 10 Construction.
+const WAYTYPE_CLASS = { 1: "main", 2: "road", 3: "quiet", 4: "path", 5: "path", 6: "path", 7: "path", 8: "path" };
+// OpenRouteService "surface" codes that mean gravel, dirt, grass and the like.
+const UNPAVED_SURFACES = new Set([2, 8, 9, 10, 11, 12, 15, 16, 17]);
+
+function haversine(a, b) {
+  const R = 6371000, rad = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * rad, dLng = (b[1] - a[1]) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * rad) * Math.cos(b[0] * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Turn one OpenRouteService route (a GeoJSON feature) into coordinates,
+// cumulative distance and runs of one class.
+function processRoute(feature) {
+  const coords = feature.geometry.coordinates.map(c => [c[1], c[0]]);
+  const cls = new Array(coords.length).fill("quiet");
+  const waytypes = (feature.properties.extras && feature.properties.extras.waytype) || { values: [] };
+  for (const [from, to, code] of waytypes.values) {
+    const c = WAYTYPE_CLASS[code] || "quiet";
+    for (let i = from + 1; i <= to && i < coords.length; i++) cls[i] = c;
+  }
+  const cum = [0];
+  for (let i = 1; i < coords.length; i++) cum[i] = cum[i - 1] + haversine(coords[i - 1], coords[i]);
+  const runs = [];
+  for (let i = 1; i < coords.length; i++) {
+    const last = runs[runs.length - 1];
+    if (last && last.cls === cls[i]) last.end = i;
+    else runs.push({ cls: cls[i], start: i - 1, end: i });
+  }
+  for (const r of runs) r.len = cum[r.end] - cum[r.start];
+  const totals = { path: 0, quiet: 0, road: 0, main: 0 };
+  for (const r of runs) totals[r.cls] += r.len;
+  // Unpaved stretches as [start, end] distances along the route, joining neighbours.
+  const unpavedStretches = [];
+  const surfaces = (feature.properties.extras && feature.properties.extras.surface) || { values: [] };
+  for (const [from, to, code] of surfaces.values) {
+    if (!UNPAVED_SURFACES.has(code)) continue;
+    const a = cum[Math.min(from, cum.length - 1)], b = cum[Math.min(to, cum.length - 1)];
+    const last = unpavedStretches[unpavedStretches.length - 1];
+    if (last && last[1] === a) last[1] = b;
+    else unpavedStretches.push([a, b]);
+  }
+  const unpaved = unpavedStretches.reduce((sum, [a, b]) => sum + b - a, 0);
+  const summary = feature.properties.summary || {};
+  return { coords, cum, runs, totals, unpaved, unpavedStretches, total: cum[cum.length - 1], seconds: summary.duration || 0 };
+}
+
+// Higher is better: rewards paths, punishes main roads and unpaved surfaces hard
+// (this is set up for a road bike), and marks down detours.
+function scoreRoute(r, shortest) {
+  const t = r.totals;
+  return (t.path + 0.5 * t.quiet - 0.3 * t.road - 1.5 * t.main - 1.5 * r.unpaved) / r.total - 0.5 * (r.total / shortest - 1);
+}
+
+// Best route first, dropping near-copies (same length and mix within 2%).
+function rankRoutes(routes) {
+  const shortest = Math.min(...routes.map(r => r.total));
+  const sorted = routes.slice().sort((a, b) => scoreRoute(b, shortest) - scoreRoute(a, shortest));
+  const kept = [];
+  for (const r of sorted) {
+    const copy = kept.some(k => Math.abs(k.total - r.total) < 0.02 * r.total &&
+      Object.keys(r.totals).every(c => Math.abs(k.totals[c] / k.total - r.totals[c] / r.total) < 0.02));
+    if (!copy) kept.push(r);
+  }
+  return kept;
+}
+
+// Stretches a road bike should steer around: main roads over 150 m and unpaved over 100 m.
+function stretchesToAvoid(route) {
+  const main = route.runs.filter(r => r.cls === "main" && r.len >= 150).map(r => [route.cum[r.start], route.cum[r.end]]);
+  const unpaved = route.unpavedStretches.filter(([a, b]) => b - a >= 100);
+  return main.concat(unpaved).sort((x, y) => x[0] - y[0]);
+}
+
+// Thin rectangles along the stretches to avoid, for OpenRouteService's avoid_polygons
+// option. The ends of each stretch stay open so routes can still cross main roads.
+function avoidCorridors(route, { endGap = 40, step = 50, halfWidth = 6 } = {}) {
+  const M_PER_DEG = 111320;
+  const rings = [];
+  for (const [from, to] of stretchesToAvoid(route)) {
+    const startD = from + endGap, endD = to - endGap;
+    for (let d = startD; d < endD; d += step) {
+      const a = pointAt(route, d), b = pointAt(route, Math.min(d + step, endD));
+      const kx = M_PER_DEG * Math.cos(a.lat * Math.PI / 180);
+      const dx = (b.lng - a.lng) * kx, dy = (b.lat - a.lat) * M_PER_DEG;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) continue;
+      const ox = (-dy / len) * halfWidth / kx, oy = (dx / len) * halfWidth / M_PER_DEG;
+      rings.push([[a.lng + ox, a.lat + oy], [a.lng - ox, a.lat - oy], [b.lng - ox, b.lat - oy], [b.lng + ox, b.lat + oy], [a.lng + ox, a.lat + oy]]);
+    }
+  }
+  return rings;
+}
+
+// OpenRouteService refuses avoid areas spread over more than about 20 km, so keep the
+// corridors that fit in an 18 km box, in route order.
+function limitCorridors(rings, maxSpan = 18000) {
+  const kept = [];
+  let box = null;
+  for (const ring of rings) {
+    const lngs = ring.map(p => p[0]), lats = ring.map(p => p[1]);
+    const next = box
+      ? [Math.min(box[0], ...lngs), Math.min(box[1], ...lats), Math.max(box[2], ...lngs), Math.max(box[3], ...lats)]
+      : [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)];
+    const w = haversine([next[1], next[0]], [next[1], next[2]]), h = haversine([next[1], next[0]], [next[3], next[0]]);
+    if (w > maxSpan || h > maxSpan) break;
+    box = next;
+    kept.push(ring);
+  }
+  return kept;
+}
+
+function orsErrorMessage(status, data) {
+  const err = data && data.error;
+  const msg = typeof err === "string" ? err : (err && err.message) || "";
+  if (status === 401 || status === 403) return "Your OpenRouteService key isn't working. Tap Change routing key and paste it again.";
+  if (status === 429) return "You've used today's free routes. The limit resets tomorrow.";
+  if (/routable point/i.test(msg)) return "Couldn't find a bike route there. Try moving a pin closer to a road or path.";
+  return `The route service had a problem (${status}${msg ? ": " + msg.slice(0, 120) : ""}). Try again in a moment.`;
+}
+
+function pointAt(route, d) {
+  const { coords, cum } = route;
+  let i = 1;
+  while (i < cum.length - 1 && cum[i] < d) i++;
+  const seg = cum[i] - cum[i - 1] || 1;
+  const t = Math.min(1, Math.max(0, (d - cum[i - 1]) / seg));
+  const a = coords[i - 1], b = coords[i];
+  return { lat: a[0] + (b[0] - a[0]) * t, lng: a[1] + (b[1] - a[1]) * t };
+}
+
+// Choose up to `max` stops that pull Google onto this route:
+// first the middle of the longest bike-path stretches,
+// then extra stops in the longest gaps so Google can't wander far.
+function pickStops(route, max) {
+  const MIN_RUN = 150, MIN_SPACING = 400, MIN_FILL_GAP = 1200;
+  const { cum, runs, total } = route;
+  const candidates = runs
+    .filter(r => r.cls === "path" && r.len >= MIN_RUN)
+    .map(r => ({ d: cum[r.start] + r.len / 2, weight: r.len }))
+    .sort((a, b) => b.weight - a.weight);
+  const chosen = [];
+  for (const c of candidates) {
+    if (chosen.length >= max) break;
+    if (c.d < MIN_SPACING || total - c.d < MIN_SPACING) continue;
+    if (chosen.every(x => Math.abs(x.d - c.d) >= MIN_SPACING)) chosen.push(c);
+  }
+  while (chosen.length < max) {
+    const ds = [0, ...chosen.map(c => c.d).sort((a, b) => a - b), total];
+    let best = 0, gap = 0;
+    for (let i = 0; i < ds.length - 1; i++) {
+      if (ds[i + 1] - ds[i] > gap) { gap = ds[i + 1] - ds[i]; best = i; }
+    }
+    if (gap < MIN_FILL_GAP) break;
+    chosen.push({ d: ds[best] + gap / 2 });
+  }
+  return chosen.sort((a, b) => a.d - b.d).map(c => pointAt(route, c.d));
+}
+
+function googleMapsUrl(destination, stops) {
+  const fmt = p => p.lat.toFixed(6) + "," + p.lng.toFixed(6);
+  const params = new URLSearchParams({ api: "1", destination: fmt(destination), travelmode: "bicycling" });
+  if (stops.length) params.set("waypoints", stops.map(fmt).join("|"));
+  return "https://www.google.com/maps/dir/?" + params.toString();
+}
+
+function toGpx(route, name) {
+  const esc = s => s.replace(/[<>&"]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
+  const pts = route.coords.map(c => `<trkpt lat="${c[0].toFixed(6)}" lon="${c[1].toFixed(6)}"/>`).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Quiet Route" xmlns="http://www.topografix.com/GPX/1/1">
+<trk><name>${esc(name)}</name><trkseg>
+${pts}
+</trkseg></trk>
+</gpx>`;
+}
+// --- end route logic ---
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("qr." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("qr." + k, JSON.stringify(v)); } catch {} },
+};
+
+const state = { from: null, to: null, alt: 0, routes: [], route: null, stops: [] };
+
+const savedView = store.get("view", null);
+const map = L.map("map", { worldCopyJump: true }).setView(savedView ? savedView.c : [20, 0], savedView ? savedView.z : 2);
+L.tileLayer("https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png", {
+  maxZoom: 19, subdomains: "abc",
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="https://www.cyclosm.org">CyclOSM</a>, routing by <a href="https://openrouteservice.org">openrouteservice</a>',
+}).addTo(map);
+map.on("moveend", () => store.set("view", { c: [map.getCenter().lat, map.getCenter().lng], z: map.getZoom() }));
+
+const routeLayer = L.layerGroup().addTo(map);
+const stopLayer = L.layerGroup().addTo(map);
+const markers = {};
+
+function setStatus(msg, isError = false) {
+  $("status").textContent = msg;
+  $("status").classList.toggle("error", isError);
+}
+
+function setPoint(which, latlng, label) {
+  // The world map repeats sideways; wrap() turns e.g. -209° back into 151°.
+  latlng = L.latLng(latlng).wrap();
+  state[which] = { lat: latlng.lat, lng: latlng.lng };
+  $(which).value = label;
+  const icon = L.divIcon({ className: "", html: `<div class="pin ${which === "from" ? "a" : "b"}">${which === "from" ? "A" : "B"}</div>`, iconSize: [30, 30], iconAnchor: [15, 15] });
+  if (markers[which]) markers[which].setLatLng(latlng);
+  else {
+    markers[which] = L.marker(latlng, { icon, draggable: true }).addTo(map);
+    markers[which].on("dragend", e => { setPoint(which, e.target.getLatLng(), "Pin on map"); maybeRoute(); });
+  }
+}
+
+function maybeRoute() {
+  if (state.from && state.to) { state.alt = 0; findRoute(); }
+}
+
+map.on("click", e => {
+  if (!state.from) setPoint("from", e.latlng, "Pin on map");
+  else setPoint("to", e.latlng, "Pin on map");
+  if (!state.to) setStatus("Now tap or search for your destination.");
+  maybeRoute();
+});
+
+// Place suggestions as you type (Photon, built on OpenStreetMap data for search-as-you-type).
+// Results lean towards where you are, or where the map is looking.
+function searchCentre() {
+  if (state.here) return state.here;
+  if (map.getZoom() >= 8) { const c = map.getCenter(); return { lat: c.lat, lng: c.lng }; }
+  return null;
+}
+
+async function photon(q, centre, extra, signal) {
+  const params = new URLSearchParams({ q, limit: "10", lang: "en", ...extra });
+  if (centre) { params.set("lat", centre.lat.toFixed(4)); params.set("lon", centre.lng.toFixed(4)); }
+  const res = await fetch("https://photon.komoot.io/api/?" + params, { signal });
+  if (!res.ok) throw new Error("Place search is not responding. Try again in a moment.");
+  return (await res.json()).features;
+}
+
+function describePlace(f) {
+  const p = f.properties;
+  const [lng, lat] = f.geometry.coordinates;
+  const street = [p.housenumber, p.street].filter(Boolean).join(" ");
+  const name = p.name || street || p.city || "Unnamed place";
+  let kind = (p.osm_value || "").replace(/_/g, " ");
+  if (p.osm_key === "railway" && p.osm_value === "station") kind = "railway station";
+  if (p.osm_value === "house") kind = "address";
+  if (p.osm_key === "highway" && !["bus_stop", "platform"].includes(p.osm_value)) kind = "street";
+  kind = kind ? kind[0].toUpperCase() + kind.slice(1) : "";
+  const area = [...new Set([p.name ? street : "", p.district || p.locality, p.city, p.state].filter(Boolean))];
+  const detail = [kind, area.slice(0, 3).join(", ")].filter(Boolean).join(" · ");
+  const short = kind && kind !== "Address" ? `${name} (${kind.toLowerCase()})` : [name, p.district || p.locality].filter(Boolean).join(", ");
+  return { id: p.osm_type + p.osm_id, lat, lng, name, detail, short };
+}
+
+// When the search mentions a station, also look for railway stations by name alone,
+// because stations are often mapped as just "Parkville" rather than "Parkville Station".
+async function findPlaces(q, signal) {
+  const centre = searchCentre();
+  const base = q.replace(/\b(train |railway )?stat(i|io|ion)?$|\b(train |railway )?station\b/i, "").trim();
+  const jobs = [photon(q, centre, {}, signal)];
+  if (base && base !== q) jobs.push(photon(base, centre, { osm_tag: "railway:station" }, signal));
+  const [general, stations = []] = await Promise.all(jobs);
+  const goodStation = f => (f.properties.name || "").toLowerCase().includes(base.toLowerCase()) &&
+    (!centre || haversine([centre.lat, centre.lng], [f.geometry.coordinates[1], f.geometry.coordinates[0]]) < 150000);
+  const places = [];
+  for (const f of [...stations.filter(goodStation), ...general]) {
+    const place = describePlace(f);
+    // Skip repeats, like a tram stop mapped once for each direction.
+    const repeat = places.some(p => p.id === place.id ||
+      (p.name === place.name && p.detail.split(" · ")[0] === place.detail.split(" · ")[0] && haversine([p.lat, p.lng], [place.lat, place.lng]) < 500));
+    if (!repeat) places.push(place);
+  }
+  // If anything is within 100 km, hide far-away places with the same name.
+  const near = centre ? places.filter(p => haversine([centre.lat, centre.lng], [p.lat, p.lng]) < 100000) : [];
+  return (near.length ? near : places).slice(0, 6);
+}
+
+function renderPlaces(which, places) {
+  const list = $(which + "-results");
+  list.innerHTML = "";
+  for (const place of places) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    const name = document.createElement("strong");
+    name.textContent = place.name;
+    const detail = document.createElement("small");
+    detail.textContent = place.detail;
+    b.append(name, detail);
+    b.addEventListener("click", () => choosePlace(which, place));
+    li.appendChild(b);
+    list.appendChild(li);
+  }
+  list.hidden = !places.length;
+}
+
+function choosePlace(which, place) {
+  $(which + "-results").hidden = true;
+  setPoint(which, place, place.short);
+  if (!state.from || !state.to) map.setView([place.lat, place.lng], 15);
+  maybeRoute();
+}
+
+const searches = {}, timers = {};
+async function suggest(which) {
+  const q = $(which).value.trim();
+  if (searches[which]) searches[which].abort();
+  if (q.length < 3) { $(which + "-results").hidden = true; return []; }
+  const ctrl = searches[which] = new AbortController();
+  try {
+    const places = await findPlaces(q, ctrl.signal);
+    if (ctrl.signal.aborted) return [];
+    renderPlaces(which, places);
+    if (!places.length) setStatus(`No places found for "${q}".`, true);
+    else if ($("status").classList.contains("error")) setStatus("");
+    return places;
+  } catch (err) {
+    if (err.name !== "AbortError") setStatus(err.message, true);
+    return [];
+  }
+}
+
+for (const which of ["from", "to"]) {
+  $(which).addEventListener("input", () => {
+    state[which] = null;
+    clearTimeout(timers[which]);
+    timers[which] = setTimeout(() => suggest(which), 300);
+  });
+  // Enter picks the top suggestion.
+  $(which).addEventListener("keydown", async e => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    clearTimeout(timers[which]);
+    const places = await suggest(which);
+    if (places.length) choosePlace(which, places[0]);
+  });
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest(".field")) for (const w of ["from", "to"]) $(w + "-results").hidden = true;
+});
+
+function locate(silent) {
+  if (!navigator.geolocation) { if (!silent) setStatus("This browser can't share your location.", true); return; }
+  if (!silent) setStatus("Finding your location…");
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const ll = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      state.here = ll;
+      setPoint("from", ll, "My location");
+      if (!state.to) map.setView([ll.lat, ll.lng], 15);
+      setStatus(state.to ? "" : "Now tap or search for your destination.");
+      maybeRoute();
+    },
+    () => { if (!silent) setStatus("Couldn't get your location. Check location permission for this site.", true); },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+$("locate").addEventListener("click", () => locate(false));
+
+$("plan").addEventListener("submit", async e => {
+  e.preventDefault();
+  for (const which of ["from", "to"]) {
+    if (!state[which] && $(which).value.trim()) {
+      clearTimeout(timers[which]);
+      const places = await suggest(which);
+      if (places.length) { $(which + "-results").hidden = true; setPoint(which, places[0], places[0].short); }
+    }
+  }
+  if (!state.from || !state.to) { setStatus("Set both a start and a destination first.", true); return; }
+  state.alt = 0;
+  findRoute();
+});
+
+const profile = () => document.querySelector('input[name="profile"]:checked').value;
+for (const r of document.querySelectorAll('input[name="profile"]')) {
+  r.addEventListener("change", () => { store.set("profile", profile()); if (state.route) { state.alt = 0; findRoute(); } });
+}
+const savedProfile = store.get("profile", "recommended");
+if ($("p-" + savedProfile)) $("p-" + savedProfile).checked = true;
+
+$("stops").value = store.get("stops", 8);
+$("stops-out").value = $("stops").value;
+$("stops").addEventListener("input", () => {
+  $("stops-out").value = $("stops").value;
+  store.set("stops", +$("stops").value);
+  if (state.route) updateStops();
+});
+
+// The routing key lives only in this device's browser storage, never in the page source.
+function showSetup(show) {
+  $("setup").hidden = !show;
+  if (show) $("ors-key").focus();
+}
+$("save-key").addEventListener("click", () => {
+  const key = $("ors-key").value.trim();
+  if (!key) { setStatus("Paste your key first.", true); return; }
+  store.set("orsKey", key);
+  $("ors-key").value = "";
+  showSetup(false);
+  setStatus("Key saved.");
+  maybeRoute();
+});
+$("change-key").addEventListener("click", () => showSetup($("setup").hidden));
+
+async function orsRoutes(key, orsProfile, body) {
+  const res = await fetch(`https://api.openrouteservice.org/v2/directions/${orsProfile}/geojson`, {
+    method: "POST",
+    headers: { Authorization: key, "Content-Type": "application/json", Accept: "application/geo+json, application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = new Error(orsErrorMessage(res.status, data));
+    err.status = res.status;
+    throw err;
+  }
+  return ((data && data.features) || []).map(f => Object.assign(processRoute(f), { orsProfile }));
+}
+
+// A problem with the key or the daily limit should stop everything; other failures
+// during the avoid passes just mean we keep the routes we already have.
+const isFatal = err => [401, 403, 429].includes(err.status);
+
+// "Paved paths first": start with OpenRouteService's bike-route-loving alternatives,
+// then twice ask again with the best route's main-road and unpaved stretches marked as areas to avoid.
+async function planRoutes(key, from, to, style, onProgress) {
+  const base = {
+    coordinates: [[from.lng, from.lat], [to.lng, to.lat]],
+    extra_info: ["waytype", "surface"],
+    instructions: false,
+  };
+  const noSteps = { avoid_features: ["steps"] };
+  // OpenRouteService only offers alternative routes for shorter trips.
+  const alternatives = haversine([from.lat, from.lng], [to.lat, to.lng]) < 80000
+    ? { alternative_routes: { target_count: 3, weight_factor: 1.6, share_factor: 0.6 } } : {};
+
+  if (style === "fastest") {
+    return rankRoutes(await orsRoutes(key, "cycling-regular", { ...base, ...alternatives, preference: "fastest", options: noSteps }));
+  }
+
+  let routes = await orsRoutes(key, "cycling-regular", { ...base, ...alternatives, preference: "recommended", options: noSteps });
+  if (!routes.length) throw new Error("No route found between these points.");
+
+  let avoid = [];
+  for (let pass = 1; pass <= 2; pass++) {
+    const best = rankRoutes(routes)[0];
+    const fresh = avoidCorridors(best);
+    if (!fresh.length) break;
+    avoid = limitCorridors(avoid.concat(fresh));
+    if (!avoid.length) break;
+    onProgress(`Steering around main roads and gravel (pass ${pass} of 2)…`);
+    try {
+      const options = { ...noSteps, avoid_polygons: { type: "MultiPolygon", coordinates: avoid.map(ring => [ring]) } };
+      routes = routes.concat(await orsRoutes(key, "cycling-regular", { ...base, preference: "recommended", options }));
+    } catch (err) {
+      if (isFatal(err)) throw err;
+      break;
+    }
+  }
+  return rankRoutes(routes);
+}
+
+let requestId = 0;
+async function findRoute() {
+  const key = store.get("orsKey", "");
+  if (!key) { showSetup(true); setStatus("Add your OpenRouteService key to find routes.", true); return; }
+  const id = ++requestId;
+  const { from, to } = state;
+  setStatus("Looking for trails and quiet routes…");
+  $("go").disabled = $("alt").disabled = true;
+  try {
+    const routes = await planRoutes(key, from, to, profile(), msg => { if (id === requestId) setStatus(msg); });
+    if (id !== requestId) return;
+    state.routes = routes;
+    state.alt = 0;
+    showRoute();
+  } catch (err) {
+    if (id !== requestId) return;
+    setStatus(err instanceof TypeError ? "Couldn't reach the route service. Check your connection." : err.message, true);
+  } finally {
+    if (id === requestId) $("go").disabled = $("alt").disabled = false;
+  }
+}
+
+function showRoute() {
+  state.route = state.routes[state.alt];
+  drawRoute();
+  const r = state.route, n = state.routes.length;
+  const parts = [];
+  if (n > 1) parts.push(`Route ${state.alt + 1} of ${n}${state.alt === 0 ? " (best match)" : ""}`);
+  parts.push(`${Math.round(100 * r.totals.main / r.total)}% main roads`);
+  parts.push(`${Math.round(100 * r.unpaved / r.total)}% unpaved`);
+  setStatus(parts.join(" · "));
+}
+
+function drawRoute() {
+  const route = state.route;
+  routeLayer.clearLayers();
+  for (const r of route.runs) {
+    L.polyline(route.coords.slice(r.start, r.end + 1), { color: CLASSES[r.cls].color, weight: 6, opacity: 0.9 })
+      .bindTooltip(CLASSES[r.cls].label, { sticky: true })
+      .addTo(routeLayer);
+  }
+  map.fitBounds(L.latLngBounds(route.coords), { padding: [30, 30] });
+
+  $("dist").textContent = (route.total / 1000).toFixed(1);
+  $("time").textContent = Math.max(1, Math.round(route.seconds / 60));
+  $("away").textContent = Math.round(100 * route.totals.path / route.total) + "%";
+  $("bar").innerHTML = "";
+  $("legend").innerHTML = "";
+  for (const [key, c] of Object.entries(CLASSES)) {
+    const pct = 100 * route.totals[key] / route.total;
+    const s = document.createElement("span");
+    s.style.width = pct + "%";
+    s.style.background = c.color;
+    $("bar").appendChild(s);
+    const li = document.createElement("li");
+    li.innerHTML = `<i style="background:${c.color}"></i>${c.label}<em>${Math.round(pct)}%</em>`;
+    $("legend").appendChild(li);
+  }
+  $("result").hidden = false;
+  updateStops();
+}
+
+function updateStops() {
+  state.stops = pickStops(state.route, +$("stops").value);
+  stopLayer.clearLayers();
+  state.stops.forEach((p, i) => {
+    L.marker([p.lat, p.lng], {
+      icon: L.divIcon({ className: "", html: `<div class="stop">${i + 1}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }),
+      interactive: false,
+    }).addTo(stopLayer);
+  });
+  $("gmaps").href = googleMapsUrl(state.to, state.stops);
+}
+
+$("alt").addEventListener("click", () => {
+  if (!state.route) return;
+  if (state.routes.length < 2) { setStatus("No other routes found for this trip."); return; }
+  state.alt = (state.alt + 1) % state.routes.length;
+  showRoute();
+});
+
+$("share").addEventListener("click", async () => {
+  const url = $("gmaps").href;
+  try {
+    if (navigator.share) { await navigator.share({ title: "Bike route", url }); return; }
+    await navigator.clipboard.writeText(url);
+    setStatus("Link copied.");
+  } catch (err) {
+    if (err && err.name !== "AbortError") setStatus("Couldn't share. Long-press Open in Google Maps to copy the link.", true);
+  }
+});
+
+// Opens the phone's share sheet with the GPX file so it can go straight to OsmAnd.
+// Falls back to a normal download where sharing files isn't supported.
+$("gpx").addEventListener("click", async () => {
+  const name = `${$("from").value} to ${$("to").value}`;
+  const gpx = toGpx(state.route, name);
+  const file = new File([gpx], "quiet-route.gpx", { type: "application/gpx+xml" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: name });
+      return;
+    } catch (err) {
+      if (err.name === "AbortError") return;
+    }
+  }
+  const blob = new Blob([gpx], { type: "application/gpx+xml" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "quiet-route.gpx";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+});
+
+// Start from where the rider is, if they allow it.
+locate(true);
+if (!store.get("orsKey", "")) {
+  $("setup").hidden = false;
+  setStatus("Paste your free OpenRouteService key above to get started.");
+} else {
+  setStatus("Search for places or tap the map to set start and destination.");
+}
+</script>
+</body>
+</html>
