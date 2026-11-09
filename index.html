@@ -148,7 +148,7 @@
 <main class="panel">
   <header>
     <h1>Quiet Route</h1>
-    <p class="sub">Finds a route on bike paths first, then sends it to OsmAnd or Google Maps.</p>
+    <p class="sub">Finds a route on bike paths first, then sends it to Komoot, OsmAnd or Google Maps.</p>
   </header>
 
   <section id="setup" class="setup" hidden>
@@ -205,7 +205,7 @@
     <div class="bar" id="bar" aria-hidden="true"></div>
     <ul class="legend" id="legend"></ul>
 
-    <button id="gpx" type="button" class="primary big">Send to OsmAnd</button>
+    <button id="gpx" type="button" class="primary big">Send to Komoot / OsmAnd</button>
     <a id="gmaps" class="btn big" href="#" target="_blank" rel="noopener">Open in Google Maps</a>
     <div class="row wrap">
       <button id="save" type="button">Save route</button>
@@ -220,7 +220,7 @@
         <button id="save-cancel" type="button">Cancel</button>
       </div>
     </div>
-    <p class="hint">Send to OsmAnd passes the exact route to OsmAnd, where you can start navigation on it.</p>
+    <p class="hint">Send to Komoot / OsmAnd shares the exact route as a file. If the app isn't listed, tap Save to Files, then import it in the app (Komoot: Profile → Saved routes → Import).</p>
 
     <div class="field">
       <label for="stops">Stops sent to Google: <output id="stops-out" for="stops">8</output></label>
@@ -430,6 +430,12 @@ function uniqueRouteName(fromName, toName, takenNames) {
   let name = base;
   for (let n = 2; takenNames.includes(name); n++) name = `${base} (${n})`;
   return name;
+}
+
+// "Parkville Station to Carlton.gpx", with characters files can't use removed.
+function gpxFileName(name) {
+  const clean = name.replace(/[\/\\:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80).trim();
+  return (clean || "Quiet Route") + ".gpx";
 }
 
 function googleMapsUrl(destination, stops) {
@@ -776,6 +782,9 @@ function showRoute() {
   parts.push(`${Math.round(100 * r.totals.main / r.total)}% main roads`);
   parts.push(`${Math.round(100 * r.unpaved / r.total)}% unpaved`);
   setStatus(parts.join(" · "));
+  // Look up names for pins and "My location" now, so file names are ready by the time you tap Send.
+  endName("from");
+  endName("to");
 }
 
 function drawRoute() {
@@ -837,12 +846,24 @@ $("share").addEventListener("click", async () => {
   }
 });
 
-// Opens the phone's share sheet with the GPX file so it can go straight to OsmAnd.
+// The saved name if this route is saved, otherwise "Start to Destination" using
+// the short place names. Kept free of network calls: iPhones only allow the
+// share sheet straight after the tap.
+function routeName() {
+  const saved = state.route.savedId && loadSaved().find(s => s.id === state.route.savedId);
+  if (saved) return saved.name;
+  const typed = which => ["Pin on map", "My location"].includes($(which).value) ? "" : $(which).value.split(",")[0].trim();
+  const short = which => state[which + "Name"] || typed(which);
+  return `${short("from") || "Start"} to ${short("to") || "Destination"}`;
+}
+
+// Opens the phone's share sheet with the GPX file so it can go straight to Komoot or OsmAnd.
 // Falls back to a normal download where sharing files isn't supported.
 $("gpx").addEventListener("click", async () => {
-  const name = `${$("from").value} to ${$("to").value}`;
+  const name = routeName();
   const gpx = toGpx(state.route, name);
-  const file = new File([gpx], "quiet-route.gpx", { type: "application/gpx+xml" });
+  const fileName = gpxFileName(name);
+  const file = new File([gpx], fileName, { type: "application/gpx+xml" });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title: name });
@@ -854,7 +875,7 @@ $("gpx").addEventListener("click", async () => {
   const blob = new Blob([gpx], { type: "application/gpx+xml" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "quiet-route.gpx";
+  a.download = fileName;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -885,7 +906,10 @@ async function endName(which) {
     const res = await fetch(`https://photon.komoot.io/reverse?lat=${p.lat}&lon=${p.lng}&lang=en`);
     const f = (await res.json()).features[0];
     const pr = f.properties;
-    return pr.district || pr.locality || pr.street || pr.name || pr.city;
+    const name = pr.district || pr.locality || pr.street || pr.name || pr.city;
+    // Remember it for file names, unless the point moved while we waited.
+    if (state[which] === p) state[which + "Name"] = name || null;
+    return name;
   } catch {
     return null;
   }
