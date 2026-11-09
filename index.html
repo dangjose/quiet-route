@@ -45,7 +45,7 @@
   #map { height: 44vh; min-height: 260px; flex: none; background: var(--line); }
   .panel {
     flex: 1; overflow-y: auto;
-    padding-block: 16px calc(24px + env(safe-area-inset-bottom, 0px));
+    padding-block: 16px calc(24px + env(safe-area-inset-bottom, 0px) + var(--keyboard, 0px));
     padding-left: max(16px, env(safe-area-inset-left, 0px));
     padding-right: max(16px, env(safe-area-inset-right, 0px));
     display: flex; flex-direction: column; gap: 14px;
@@ -129,6 +129,11 @@
   .saved .actions button { padding: 6px 10px; font-size: 0.85rem; }
   .saved li input { flex: 1; min-width: 0; padding: 8px 10px; }
   .danger { color: var(--busy); }
+  .saved li.just-saved { animation: just-saved 2.5s ease-out; }
+  @keyframes just-saved { from { background: color-mix(in srgb, var(--lane) 35%, transparent); } to { background: transparent; } }
+  @media (prefers-reduced-motion: reduce) { .saved li.just-saved { animation: none; outline: 2px solid var(--lane); } }
+  /* On phones, shrink the map while typing so the keyboard doesn't hide what you're editing. */
+  @media (max-width: 859px) { body.typing #map { height: 18vh; min-height: 110px; } }
   .setup { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
   .link { align-self: flex-start; background: none; border: 0; padding: 4px 0; font-weight: 400; color: var(--muted); text-decoration: underline; }
   .stop {
@@ -915,11 +920,20 @@ function confirmSave() {
   list.unshift(entry);
   if (!writeSaved(list)) return;
   state.route.savedId = entry.id;
+  $("save-name").blur();
   $("save-form").hidden = true;
   $("save").textContent = "Saved";
   $("save").disabled = true;
-  setStatus(`Saved as "${name}".`);
+  setStatus(`Saved as "${name}" in Saved routes.`);
   renderSaved();
+  // Show where it went: open the list, scroll to it and flash the new route.
+  const first = $("saved-list").firstElementChild;
+  $("saved").open = true;
+  if (first) {
+    first.classList.add("just-saved");
+    // Wait until the map has grown back after typing, or the scroll lands short.
+    setTimeout(() => $("saved").scrollIntoView({ block: "start" }), 650);
+  }
 }
 $("save-confirm").addEventListener("click", confirmSave);
 $("save-name").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); confirmSave(); } });
@@ -1017,6 +1031,38 @@ function startRename(li, entry) {
 }
 
 renderSaved();
+
+// --- Keeping typed-in fields visible above the iPhone keyboard ---
+// The keyboard covers the page without resizing it, so: shrink the map while a text box
+// has focus, pad the bottom of the panel by the keyboard's height, and scroll the box into view.
+const isTextBox = el => el && el.matches && el.matches('input[type="text"], input[type="search"], input[type="password"]');
+let typingTimer;
+document.addEventListener("focusin", e => {
+  if (!isTextBox(e.target)) return;
+  clearTimeout(typingTimer);
+  if (!document.body.classList.contains("typing")) {
+    document.body.classList.add("typing");
+    setTimeout(() => map.invalidateSize(), 50);
+  }
+  setTimeout(() => e.target.scrollIntoView({ block: "center" }), 300);
+});
+document.addEventListener("focusout", e => {
+  if (!isTextBox(e.target)) return;
+  // Wait before growing the map back, so a tap on a suggestion lands where it was aimed.
+  typingTimer = setTimeout(() => {
+    if (isTextBox(document.activeElement)) return;
+    document.body.classList.remove("typing");
+    setTimeout(() => map.invalidateSize(), 50);
+  }, 400);
+});
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  vv.addEventListener("resize", () => {
+    const covered = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    document.documentElement.style.setProperty("--keyboard", covered + "px");
+    if (covered && isTextBox(document.activeElement)) document.activeElement.scrollIntoView({ block: "center" });
+  });
+}
 
 // Start from where the rider is, if they allow it.
 locate(true);
